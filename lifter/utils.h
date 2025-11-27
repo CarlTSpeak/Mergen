@@ -50,6 +50,7 @@ namespace debugging {
   int increaseInstCounter();
   void enableDebug(const std::string& filename);
   void doIfDebug(const std::function<void(void)>& dothis);
+  void flushDebugStream();
 
   extern bool shouldDebug;
   extern llvm::raw_ostream* debugStream;
@@ -60,11 +61,9 @@ namespace debugging {
 
     if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, int8_t>) {
       *debugStream << " " << name << " : " << static_cast<int>(v) << "\n";
-      debugStream->flush();
       return;
     } else
       *debugStream << " " << name << " : " << v << "\n";
-    debugStream->flush();
   }
   template <typename T>
   concept Printable = requires(T t, llvm::raw_ostream& os) {
@@ -77,12 +76,16 @@ namespace debugging {
     *debugStream << " " << name << " : ";
     v->print(*debugStream);
     *debugStream << "\n";
-    debugStream->flush();
   }
 
 } // namespace debugging
 
 namespace argparser {
+  struct Settings {
+    bool emitNoOptIR = true;
+  };
+
+  Settings& getSettings();
   void parseArguments(std::vector<std::string>& args);
 } // namespace argparser
 
