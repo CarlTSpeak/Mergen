@@ -1,6 +1,6 @@
 [cmake]
 version = "3.16"
-cmkr-include = "cmake/cmkr.cmake;"
+cmkr-include = "cmake/cmkr.cmake"
 
 [project]
 name = "Mergen"
@@ -8,15 +8,21 @@ name = "Mergen"
 [conditions]
 windows = "WIN32"
 testmode = "DEFINED MERGEN_TEST"
+msvc = "MSVC"
+clang_or_gcc = "NOT MSVC"
 
+[options]
+BUILD_WITH_ZYDIS = { type = "bool", default = false, description = "Force using the Zydis backend (skip Rust/Cargo for iced)" }
 
 [variables]
 CMAKE_MODULE_PATH = "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
-CMAKE_CXX_FLAGS_DEBUG = "-O0 -gfull"
+clang_or_gcc.CMAKE_CXX_FLAGS_DEBUG = "-O0 -g"
+msvc.CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 
 [fetch-content.linux-pe]
 git = "https://github.com/can1357/linux-pe"
 tag = "be6d1f6"
+source = "linux-pe"
 
 
 [find-package.Iced-Wrapper]
@@ -25,6 +31,7 @@ tag = "be6d1f6"
 condition = "ICED_NOT_FOUND"
 git = "https://github.com/zyantific/zydis"
 tag = "v4.1.0"
+source = "Zydis-4.1.0"
 
 [fetch-content.magic_enum]
 git = "https://github.com/Neargye/magic_enum"
@@ -45,3 +52,4 @@ windows.link-libraries = ["Ws2_32"]
 compile-features = ["cxx_std_20"]
 testmode.compile-definitions = ["MERGEN_TEST"]
 msvc.compile-options = ["/Zc:preprocessor"]
+msvc.compile-options += ["/permissive-", "/Zc:__cplusplus", "/EHsc", "/bigobj", "/utf-8"]

@@ -442,10 +442,23 @@ public:
   }
 
   void writeFunctionToFile(const std::string filename) {
+    // Buffer the IR into memory first to avoid repeatedly flushing to disk
+    // while printing a large module. This keeps the output contiguous and only
+    // performs a single write per file.
+    std::string buffer;
+    llvm::raw_string_ostream stream(buffer);
+    fnc->getParent()->print(stream, nullptr);
+    stream.flush();
 
     std::error_code EC_noopt;
-    llvm::raw_fd_ostream OS_noopt(filename, EC_noopt);
-    fnc->getParent()->print(OS_noopt, nullptr);
+    llvm::raw_fd_ostream OS_noopt(filename, EC_noopt,
+                                  llvm::sys::fs::OF_Text);
+    if (EC_noopt) {
+      llvm::errs() << "Failed to open IR output file '" << filename
+                   << "': " << EC_noopt.message() << "\n";
+      return;
+    }
+    OS_noopt << buffer;
   }
 
   // ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];

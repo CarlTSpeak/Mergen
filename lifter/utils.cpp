@@ -101,6 +101,11 @@ namespace debugging {
     llvm::outs() << "Debugging enabled\n";
   }
 
+  void flushDebugStream() {
+    if (debugStream)
+      debugStream->flush();
+  }
+
   // Other functions remain the same, but use debugStream instead of
   // llvm::outs() For example:
 
@@ -113,16 +118,23 @@ namespace debugging {
 } // namespace debugging
 
 namespace argparser {
+  Settings settings;
+
+  Settings& getSettings() { return settings; }
+
   void printHelp() {
     std::cerr << "Options:\n"
               << "  -d, --enable-debug        Enable debugging mode\n"
               << "  -h                        Display this help message\n"
               << "  --concretize-unsafe-reads Concretizes potentially unsafe "
-                 "reads to writable sections \n";
+                 "reads to writable sections \n"
+              << "  --no-preopt-ll            Skip writing the pre-optimisation "
+                 "IR dump (output_no_opts.ll)\n";
   }
 
   std::map<std::string, std::function<void()>> options = {
       {"-d", []() { debugging::enableDebug("debug.txt"); }},
+      {"--no-preopt-ll", []() { settings.emitNoOptIR = false; }},
       //
       {"-h", printHelp}};
 

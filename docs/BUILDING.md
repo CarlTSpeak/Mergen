@@ -31,6 +31,12 @@ docker run --rm -v $PWD:/data mergen target.exe 0x123456789
 
 Here's a detailed guide to setting up your environment to build LLVM 18.1.0 on Windows, using Clang and Ninja, and configuring it to compile Mergen.
 
+> Quick tips for Windows builds
+>
+> - Pass `-DBUILD_WITH_ZYDIS=ON` to `cmake` if you do not have a Rust toolchain installed; this forces the C++ Zydis backend and avoids pulling Corrosion/Cargo.
+> - Vendored sources for `linux-pe` and `Zydis` are used automatically when their directories exist in the repository; this keeps Windows builds reproducible even without network access.
+> - The CMake files now set `/bigobj`, `/utf-8`, `/EHsc`, `/Zc:__cplusplus`, and a static MSVC runtime by default to match typical LLVM binaries and reduce Windows-specific build errors.
+
 ---
 
 # Building LLVM 18.1.0 from Scratch on Windows

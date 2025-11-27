@@ -176,15 +176,19 @@ void InitFunction_and_LiftInstructions(const uint64_t runtime_address,
   std::cout << "\nlifting complete, " << std::dec << ms
             << " milliseconds has past" << std::endl;
 
-  main->writeFunctionToFile("output_no_opts.ll");
+  const auto& settings = argparser::getSettings();
+  if (settings.emitNoOptIR) {
+    main->writeFunctionToFile("output_no_opts.ll");
 
-  std::cout << "\nwriting complete, " << std::dec << ms
-            << " milliseconds has past" << std::endl;
+    std::cout << "\nwriting complete, " << std::dec << ms
+              << " milliseconds has past" << std::endl;
+  }
 
   // final_optpass(main->fnc, main->fnc->getArg(main->fnc->arg_size()),
   //               fileData.data(), main->memoryPolicy);
   main->run_opts();
   main->writeFunctionToFile("output.ll");
+  debugging::flushDebugStream();
   return;
 }
 
