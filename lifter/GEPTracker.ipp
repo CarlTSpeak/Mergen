@@ -5,6 +5,7 @@
 #include "OperandUtils.ipp"
 #include "lifterClass.hpp"
 #include "utils.h"
+#include <llvm/ADT/SmallPtrSet.h>
 #include "llvm/Analysis/MemorySSA.h"
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
@@ -605,7 +606,7 @@ calculatePossibleValues(std::set<APInt, APIntComparator> v1,
 }
 
 MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::computePossibleValues(
-    Value* V, uint8_t Depth) {
+    Value* V, uint8_t Depth, SmallPtrSetImpl<Value*>* Visited) {
   printvalue2(Depth);
   if (Depth > 16) {
     debugging::doIfDebug([&]() {
@@ -618,6 +619,19 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::computePossibleValues(
   }
   std::set<APInt, APIntComparator> res;
   printvalue(V);
+  SmallPtrSet<Value*, 16> LocalVisited;
+  if (!Visited)
+    Visited = &LocalVisited;
+
+  // Avoid exponential blowups when the same IR node recurs in the value graph
+  // (e.g. self-referential phis). We treat revisits as "unknown" and bail out
+  // with instrumentation to show which value forced the cut-off.
+  if (!Visited->insert(V).second) {
+    std::cout << "[computePossibleValues] cycle detected at " << *V
+              << ", aborting value enumeration" << std::endl;
+    return res;
+  }
+
   if (auto v_ci = dyn_cast<ConstantInt>(V)) {
     res.insert(v_ci->getValue());
     return res;
@@ -627,7 +641,7 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::computePossibleValues(
       return {};
     }
     if (v_inst->getNumOperands() == 1)
-      return computePossibleValues(v_inst->getOperand(0), Depth + 1);
+      return computePossibleValues(v_inst->getOperand(0), Depth + 1, Visited);
 
     if (v_inst->getOpcode() == Instruction::Select) {
       auto cond = v_inst->getOperand(0);
@@ -638,22 +652,22 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::computePossibleValues(
       printvalue2(kb);
 
       if (kb.isZero()) {
-        auto falseValues = computePossibleValues(falseValue, Depth + 1);
+        auto falseValues = computePossibleValues(falseValue, Depth + 1, Visited);
 
         res.insert(falseValues.begin(), falseValues.end());
         return res;
       }
       if (kb.isNonZero()) {
-        auto trueValues = computePossibleValues(trueValue, Depth + 1);
+        auto trueValues = computePossibleValues(trueValue, Depth + 1, Visited);
 
         res.insert(trueValues.begin(), trueValues.end());
         return res;
       }
-      auto trueValues = computePossibleValues(trueValue, Depth + 1);
+      auto trueValues = computePossibleValues(trueValue, Depth + 1, Visited);
       // Combine all possible values from both branches
       res.insert(trueValues.begin(), trueValues.end());
 
-      auto falseValues = computePossibleValues(falseValue, Depth + 1);
+      auto falseValues = computePossibleValues(falseValue, Depth + 1, Visited);
 
       res.insert(falseValues.begin(), falseValues.end());
       return res;
@@ -688,8 +702,8 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::computePossibleValues(
 
     if ((res_unknownbits_count >= total_unknownbits_count) &&
         res_unknownbits_count != 1) {
-      auto v1 = computePossibleValues(op1, Depth + 1);
-      auto v2 = computePossibleValues(op2, Depth + 1);
+      auto v1 = computePossibleValues(op1, Depth + 1, Visited);
+      auto v2 = computePossibleValues(op2, Depth + 1, Visited);
 
       printvalue(v_inst);
       printvalue2(v_knownbits);
@@ -705,7 +719,26 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::computePossibleValues(
       }
       return calculatePossibleValues(v1, v2, v_inst);
     }
-    return getPossibleValues(v_knownbits, res_unknownbits_count);
+    auto values = getPossibleValues(v_knownbits, res_unknownbits_count);
+
+    constexpr std::size_t kMaxEnumeratedValues = 512;
+    if (values.size() > kMaxEnumeratedValues) {
+      std::cout << "[computePossibleValues] value set truncated at "
+                << values.size() << " entries for " << *V << std::endl;
+      // Keep only the first kMaxEnumeratedValues to avoid exploding memory
+      // usage when a small increase in unknown bits would generate a huge
+      // cross-product.
+      pvalueset limited;
+      std::size_t kept = 0;
+      for (const auto& ap : values) {
+        limited.insert(ap);
+        if (++kept >= kMaxEnumeratedValues)
+          break;
+      }
+      return limited;
+    }
+
+    return values;
   }
   return res;
 }
