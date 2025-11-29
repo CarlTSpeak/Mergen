@@ -413,6 +413,23 @@ public:
   bool addUnvisitedAddr(BBInfo& bb) {
     printvalue2(bb.block_address);
     printvalue2("added");
+    // Avoid re-queuing blocks we've already explored. Without this guard,
+    // obfuscated control flow can repeatedly schedule the same address and
+    // explode the backup state we keep per pending block, eventually
+    // exhausting memory.
+    if (visitedAddresses.contains(bb.block_address)) {
+      printvalue2("skip visited block");
+      return false;
+    }
+
+    // Prevent multiple queued copies of the same block when branches converge
+    // to an existing target. This keeps the pending queue bounded while still
+    // exploring each unique address once.
+    if (!pendingBlocks.insert(bb.block_address).second) {
+      printvalue2("skip duplicate pending block");
+      return false;
+    }
+
     unvisitedBlocks.push_back(bb);
     return true;
   }
@@ -426,12 +443,16 @@ public:
 
     out = std::move(unvisitedBlocks.back());
     unvisitedBlocks.pop_back();
+    pendingBlocks.erase(out.block_address);
 
     if (getControlFlow() == ControlFlow::Basic && !(out.block->empty()) &&
         filter) {
       printvalue2("not empty ;D ");
       return getUnvisitedAddr(out);
     }
+
+    // std::cout << "queue:" << pendingBlocks.size() << " visited:"
+    //           << visitedAddresses.size() << "\n";
 
     printvalue2("adding :" + std::to_string(out.block_address) +
                 out.block->getName());
@@ -532,18 +553,23 @@ public:
   // todo : std::set
   std::vector<BBInfo> unvisitedBlocks;
   std::set<uint64_t> visitedAddresses;
+  std::set<uint64_t> pendingBlocks;
   llvm::DenseMap<uint64_t, llvm::BasicBlock*> addrToBB;
 
   // creates an edge to created bb
   // TODO: wrapper for createbr, condbr, switch and update it there.
   BasicBlock* getOrCreateBB(uint64_t addr, std::string name) {
-    if (getControlFlow() == ControlFlow::Basic) {
-      auto it = addrToBB.find(addr);
-      if (it != addrToBB.end()) {
-        // also might have to update here,
-        return it->second;
-      }
+    // Reuse existing blocks even during unflattening so we do not mint
+    // unbounded duplicates for the same address. Previously Unflatten mode
+    // always created a fresh block, causing the BBbackup map to grow without
+    // bound when opaque control-flow repeatedly targeted the same address.
+    // Reusing the block keeps the backup/state cache keyed by BasicBlock
+    // stable and halts the runaway memory growth.
+    auto it = addrToBB.find(addr);
+    if (it != addrToBB.end()) {
+      return it->second;
     }
+
     auto bb = BasicBlock::Create(context, name, fnc);
     addrToBB[addr] = bb;
     DTU->applyUpdates({{DominatorTree::Insert, this->blockInfo.block, bb}});
