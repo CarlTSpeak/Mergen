@@ -132,12 +132,17 @@ public:
 
   constexpr ControlFlow getControlFlow_impl() { return ControlFlow::Basic; }
 
-  void branch_backup_impl(BasicBlock* bb) {
+  std::size_t branch_backup_impl(BasicBlock* bb) {
     //
-    return;
+    return BBInfo::kNoBackup;
   }
 
-  void load_backup_impl(BasicBlock* bb) {
+  void discard_backup_impl(const BBInfo& /*info*/) {
+    // Symbolic mode does not retain per-block backups today, so there is
+    // nothing to reclaim when a queued state is dropped.
+  }
+
+  void load_backup_impl(const BBInfo& /*bbinfo*/) {
     //
     return;
   }
