@@ -1,0 +1,191 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4b2e412..abcd123 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -11,7 +11,7 @@ set(CMKR_ROOT_PROJECT OFF)
+ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+ 	set(CMKR_ROOT_PROJECT ON)
+ 
+-	# Bootstrap cmkr and automatically regenerate CMakeLists.txt
+-	include("cmake/cmkr.cmake;" OPTIONAL RESULT_VARIABLE CMKR_INCLUDE_RESULT)
++	# Bootstrap cmkr and automatically regenerate CMakeLists.txt
++	include("cmake/cmkr.cmake" OPTIONAL RESULT_VARIABLE CMKR_INCLUDE_RESULT)
+ 	if(CMKR_INCLUDE_RESULT)
+ 		cmkr()
+ 	endif()
+diff --git a/lifter/lifter.cpp b/lifter/lifter.cpp
+index aefa8d1..1234abc 100644
+--- a/lifter/lifter.cpp
++++ b/lifter/lifter.cpp
+@@ -176,19 +176,24 @@ void InitFunction_and_LiftInstructions(const uint64_t runtime_address,
+   std::cout << "\nlifting complete, " << std::dec << ms
+             << " milliseconds has past" << std::endl;
+ 
+-  main->writeFunctionToFile("output_no_opts.ll");
+-
+-  std::cout << "\nwriting complete, " << std::dec << ms
+-            << " milliseconds has past" << std::endl;
++  const auto& settings = argparser::getSettings();
++  if (settings.emitNoOptIR) {
++    main->writeFunctionToFile("output_no_opts.ll");
++    std::cout << "\nwriting complete, " << std::dec << ms
++              << " milliseconds has past" << std::endl;
++  }
+ 
+   // final_optpass(main->fnc, main->fnc->getArg(main->fnc->arg_size()),
+   //               fileData.data(), main->memoryPolicy);
+   main->run_opts();
+   main->writeFunctionToFile("output.ll");
++  debugging::flushDebugStream();
+   return;
+ }
+diff --git a/lifter/lifterClass.hpp b/lifter/lifterClass.hpp
+index 505c231..56789ab 100644
+--- a/lifter/lifterClass.hpp
++++ b/lifter/lifterClass.hpp
+@@ -442,16 +442,30 @@ public:
+   }
+ 
+   void writeFunctionToFile(const std::string filename) {
+-
+-    std::error_code EC_noopt;
+-    llvm::raw_fd_ostream OS_noopt(filename, EC_noopt);
+-    fnc->getParent()->print(OS_noopt, nullptr);
++    // Buffer the IR into memory first to avoid repeatedly flushing to disk
++    // while printing a large module. This keeps the output contiguous and only
++    // performs a single write per file.
++    std::string buffer;
++    llvm::raw_string_ostream stream(buffer);
++    fnc->getParent()->print(stream, nullptr);
++    stream.flush();
++
++    std::error_code EC_noopt;
++    llvm::raw_fd_ostream OS_noopt(filename, EC_noopt,
++                                  llvm::sys::fs::OF_Text);
++    if (EC_noopt) {
++      llvm::errs() << "Failed to open IR output file '" << filename
++                   << "': " << EC_noopt.message() << "\n";
++      return;
++    }
++    OS_noopt << buffer;
+   }
+ 
+   // ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+diff --git a/lifter/utils.h b/lifter/utils.h
+index 11b20e4..89abcd0 100644
+--- a/lifter/utils.h
++++ b/lifter/utils.h
+@@ -50,7 +50,8 @@ namespace debugging {
+   int increaseInstCounter();
+   void enableDebug(const std::string& filename);
+   void doIfDebug(const std::function<void(void)>& dothis);
+-  void flushDebugStream();
++  void flushDebugStream();
++
+ 
+   extern bool shouldDebug;
+   extern llvm::raw_ostream* debugStream;
+@@ -61,19 +62,22 @@ namespace debugging {
+ 
+     if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, int8_t>) {
+       *debugStream << " " << name << " : " << static_cast<int>(v) << "\n";
+-      debugStream->flush();
+       return;
+     } else
+       *debugStream << " " << name << " : " << v << "\n";
+-    debugStream->flush();
+   }
+   template <typename T>
+   concept Printable = requires(T t, llvm::raw_ostream& os) {
+     { t.print(os) } -> std::same_as<void>;
+   };
++
+   template <Printable T>
+   void debug_print_expr(std::string_view name, const T* v) {
+     if (!debugStream)
+       return;
+ 
+     *debugStream << " " << name << " : ";
+     v->print(*debugStream);
+     *debugStream << "\n";
+-    debugStream->flush();
+   }
+ 
+ } // namespace debugging
+@@ -81,7 +85,14 @@ namespace debugging {
+ namespace argparser {
+-  void parseArguments(std::vector<std::string>& args);
++  struct Settings {
++    // Whether to emit the pre-optimisation IR dump (output_no_opts.ll)
++    bool emitNoOptIR = true;
++  };
++
++  Settings& getSettings();
++  void parseArguments(std::vector<std::string>& args);
+ } // namespace argparser
+ 
+diff --git a/lifter/utils.cpp b/lifter/utils.cpp
+index 8850ea7..fedc321 100644
+--- a/lifter/utils.cpp
++++ b/lifter/utils.cpp
+@@ -101,11 +101,17 @@ namespace debugging {
+     llvm::outs() << "Debugging enabled\n";
+   }
+ 
+-  // Other functions remain the same, but use debugStream instead of
+-  // llvm::outs() For example:
++  void flushDebugStream() {
++    if (debugStream)
++      debugStream->flush();
++  }
++
++  // Other functions remain the same, but use debugStream instead of
++  // llvm::outs() For example:
+@@ -118,23 +124,34 @@ namespace debugging {
+ } // namespace debugging
+ 
+ namespace argparser {
+-  void printHelp() {
+-    std::cerr << "Options:\n"
+-              << "  -d, --enable-debug        Enable debugging mode\n"
+-              << "  -h                        Display this help message\n"
+-              << "  --concretize-unsafe-reads Concretizes potentially unsafe "
+-                 "reads to writable sections \n";
+-  }
+-
+-  std::map<std::string, std::function<void()>> options = {
+-      {"-d", []() { debugging::enableDebug("debug.txt"); }},
+-      //
+-      {"-h", printHelp}};
++  Settings settings;
++
++  Settings& getSettings() { return settings; }
++
++  void printHelp() {
++    std::cerr << "Options:\n"
++              << "  -d, --enable-debug        Enable debugging mode\n"
++              << "  -h                        Display this help message\n"
++              << "  --concretize-unsafe-reads Concretizes potentially unsafe "
++                 "reads to writable sections \n"
++              << "  --no-preopt-ll            Skip writing the pre-optimisation "
++                 "IR dump (output_no_opts.ll)\n";
++  }
++
++  std::map<std::string, std::function<void()>> options = {
++      {"-d", []() { debugging::enableDebug("debug.txt"); }},
++      {"--no-preopt-ll", []() { settings.emitNoOptIR = false; }},
++      //
++      {"-h", printHelp}};
+ 
+   void parseArguments(std::vector<std::string>& args) {
+     for (auto it = args.begin(); it != args.end();) {
+       auto optIt = options.find(*it);
+       if (optIt != options.end()) {
+         optIt->second();
+         it = args.erase(it);
+       } else {
+         ++it;
+       }
+     }
+   }
+ } // namespace argparser

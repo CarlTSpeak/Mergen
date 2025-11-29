@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "GEPTracker.h"
 #include "MemoryPolicy.hpp"
@@ -13,6 +13,7 @@
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/Transforms/Utils/SCCPSolver.h>
 #include <magic_enum/magic_enum.hpp>
+#include <iostream>
 
 using namespace llvm;
 
@@ -427,39 +428,50 @@ void removeDuplicateOffsets(std::vector<Instruction*>& vec) {
 int aea = 10;
 
 using pvalueset = std::set<APInt, APIntComparator>;
-MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)::getPossibleValues(
-    const llvm::KnownBits& known, unsigned max_unknown) {
 
-  if ((max_unknown == 0) || (max_unknown >= 4)) {
+MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)
+::getPossibleValues(const llvm::KnownBits& known, unsigned max_unknown) {
+  llvm::APInt base     = known.One;
+  llvm::APInt unknowns = ~(known.Zero | known.One);
+  unsigned    numBits  = known.getBitWidth();
 
+  std::set<APInt, APIntComparator> values;
+
+  // Case 0: no unknown bits → exactly one possible value
+  if (max_unknown == 0) {
+    values.insert(base);
+    return values;
+  }
+
+  // Allow more unknown bits before we give up
+  static constexpr unsigned kMaxUnknownBitsEnumerate = 8;
+
+  // Too many unknown bits → don’t try to enumerate them
+  if (max_unknown > kMaxUnknownBitsEnumerate) {
     debugging::doIfDebug([&]() {
       std::string Filename = "output_too_many_unk.ll";
       std::error_code EC;
       raw_fd_ostream OS(Filename, EC);
       builder->GetInsertBlock()->getParent()->getParent()->print(OS, nullptr);
     });
-    printvalueforce2(max_unknown);
-    UNREACHABLE("There is a very huge chance that this shouldnt happen");
+    // Quiet this down if you like:
+    // printvalue2(max_unknown);
+	printvalueforce2(max_unknown);
+    return values; // empty == "too many possibilities"
   }
-  llvm::APInt base = known.One;
-  llvm::APInt unknowns = ~(known.Zero | known.One);
-  unsigned numBits = known.getBitWidth();
 
-  std::set<APInt, APIntComparator> values;
-
-  llvm::APInt combo(unknowns.getBitWidth(), 0);
+  // 1..kMaxUnknownBitsEnumerate: manageable → enumerate all combos
   for (uint64_t i = 0; i < (1ULL << max_unknown); ++i) {
     llvm::APInt temp = base;
     for (unsigned j = 0, currentBit = 0; j < numBits; ++j) {
       if (unknowns[j]) {
         temp.setBitVal(j, (i >> currentBit) & 1);
-        currentBit++;
+        ++currentBit;
       }
     }
-
     values.insert(temp);
   }
-
+  printvalueforce2(max_unknown);
   return values;
 }
 

@@ -172,10 +172,10 @@ public:
 
     printvalue2("backing up");
     printvalue2(this->counter);
-    printvalueforce2("dbg1");
+    printvalue2("dbg1");
     BBbackup[bb] = backup_point(vec, vecflag, this->buffer, this->cache,
                                 this->assumptions, this->counter);
-    printvalueforce2("dbg2");
+    printvalue2("dbg2");
   }
 
   void load_backup_impl(BasicBlock* bb) {
@@ -189,7 +189,18 @@ public:
       this->cache = bbinfo.cache;
       this->assumptions = bbinfo.assumptions;
       this->counter = bbinfo.ct;
-    }
+      }
+	  
+  static std::size_t lastBBBackup = 0;
+	if (BBbackup.size() / 100 != lastBBBackup / 100) {
+    lastBBBackup = BBbackup.size();
+    llvm::errs() << "[debug] BBbackup.size(): " << lastBBBackup << "\n";
+}
+static std::size_t lastVec = 0;
+if (vec.size() / 1000 != lastVec / 1000) {
+    lastVec = vec.size();
+    llvm::errs() << "[debug] vec.size(): " << lastVec << "\n";
+}
   }
 
   void createFunction_impl() {

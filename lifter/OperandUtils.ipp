@@ -325,33 +325,36 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(Value*)::doPatternMatching(
   return nullptr;
 }
 
-MERGEN_LIFTER_DEFINITION_TEMPLATES(KnownBits)::analyzeValueKnownBits(
-    Value* value, Instruction* ctxI) {
-  KnownBits knownBits(64);
-  knownBits.resetAll();
-  if (value->getType()->getIntegerBitWidth() > 64 || isa<UndefValue>(value))
-    return knownBits;
+MERGEN_LIFTER_DEFINITION_TEMPLATES(KnownBits)
+::analyzeValueKnownBits(Value* value, Instruction* ctxI) {
+  auto *Ty = value->getType();
+  if (!Ty->isIntegerTy())
+    return KnownBits();  // or assert, depending on your expectations
 
-  if (auto v_inst = dyn_cast<Instruction>(value)) {
-    // Use find() to check if v_inst exists in the map
+  unsigned BitWidth = Ty->getIntegerBitWidth();
+  KnownBits knownBits(BitWidth);
+  knownBits.resetAll();
+
+  // Bail on >64-bit ints, but keep correct width
+  if (BitWidth > 64 || isa<UndefValue>(value))
+    return knownBits;  // all unknown, correct bit width
+
+  if (auto *v_inst = dyn_cast<Instruction>(value)) {
     auto it = assumptions.find(v_inst);
     if (it != assumptions.end()) {
-      auto a = it->second; // Retrieve the value associated with the instruction
+      auto a = it->second;
       return KnownBits::makeConstant(a);
     }
   }
 
-  if (value->getType() == Type::getInt128Ty(value->getContext()))
-    return knownBits;
-
-  if (auto CIv = dyn_cast<ConstantInt>(value)) {
-    return KnownBits::makeConstant(APInt(value->getType()->getIntegerBitWidth(),
-                                         CIv->getZExtValue(), false));
+  if (auto *CIv = dyn_cast<ConstantInt>(value)) {
+    return KnownBits::makeConstant(
+        APInt(BitWidth, CIv->getZExtValue(), false));
   }
-  auto SQ = createSimplifyQuery(ctxI);
 
-  computeKnownBits(value, knownBits, 0, SQ);
-  return knownBits.trunc(value->getType()->getIntegerBitWidth());
+  auto SQ = createSimplifyQuery(ctxI);
+  computeKnownBits(value, knownBits, SQ);  // (V, Known, SQ, Depth=0)
+  return knownBits;  // already BitWidth wide
 }
 
 Value* simplifyValue(Value* v, const DataLayout& DL) {

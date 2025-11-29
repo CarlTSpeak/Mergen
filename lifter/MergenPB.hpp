@@ -17,8 +17,10 @@
 #include <llvm/Transforms/Scalar/DCE.h>
 #include <llvm/Transforms/Scalar/EarlyCSE.h>
 #include <llvm/Transforms/Scalar/GVN.h>
-#include <llvm/Transforms/Scalar/InstCombine.h>
-#include <llvm/Transforms/Scalar/PromoteMemToReg.h>
+#include <llvm/Transforms/InstCombine/InstCombine.h>
+#include <llvm/Transforms/Utils/Mem2Reg.h>
+#include <llvm/Transforms/Scalar/Reg2Mem.h>
+#include <llvm/Transforms/Utils/PromoteMemToReg.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 
 using namespace llvm;
@@ -50,7 +52,7 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::run_opts() {
   llvm::FunctionPassManager lateCleanup;
   lateCleanup.addPass(llvm::InstCombinePass());
   lateCleanup.addPass(llvm::SimplifyCFGPass());
-  lateCleanup.addPass(llvm::GVN());
+  lateCleanup.addPass(llvm::GVNPass());
   lateCleanup.addPass(llvm::ADCEPass());
 
   llvm::ModulePassManager modulePassManager;

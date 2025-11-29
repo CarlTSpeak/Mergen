@@ -451,8 +451,7 @@ public:
     stream.flush();
 
     std::error_code EC_noopt;
-    llvm::raw_fd_ostream OS_noopt(filename, EC_noopt,
-                                  llvm::sys::fs::OF_Text);
+    llvm::raw_fd_ostream OS_noopt(filename, EC_noopt);
     if (EC_noopt) {
       llvm::errs() << "Failed to open IR output file '" << filename
                    << "': " << EC_noopt.message() << "\n";

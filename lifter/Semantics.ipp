@@ -1940,7 +1940,7 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_popcnt() {
 
   // create intrinsic for popct
   auto popcnt =
-      Intrinsic::getDeclaration(builder->GetInsertBlock()->getModule(),
+      Intrinsic::getOrInsertDeclaration(builder->GetInsertBlock()->getModule(),
                                 Intrinsic::ctpop, srcV->getType());
   Value* popcntV = nullptr;
 

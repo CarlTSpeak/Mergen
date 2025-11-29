@@ -81,7 +81,7 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)::solvePath(
 
     auto firstcase = pv[0];
     auto secondcase = pv[1];
-
+	printvalueforce2(pv.size());
     static auto try_simplify = [&](APInt c1,
                                    Value* simplifyv) -> std::optional<Value*> {
       if (auto si = dyn_cast<SelectInst>(simplifyv)) {

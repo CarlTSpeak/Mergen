@@ -11,8 +11,8 @@ set(CMKR_ROOT_PROJECT OFF)
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 	set(CMKR_ROOT_PROJECT ON)
 
-        # Bootstrap cmkr and automatically regenerate CMakeLists.txt
-        include("cmake/cmkr.cmake" OPTIONAL RESULT_VARIABLE CMKR_INCLUDE_RESULT)
+	# Bootstrap cmkr and automatically regenerate CMakeLists.txt
+	include("cmake/cmkr.cmake;" OPTIONAL RESULT_VARIABLE CMKR_INCLUDE_RESULT)
 	if(CMKR_INCLUDE_RESULT)
 		cmkr()
 	endif()
@@ -26,69 +26,39 @@ endif()
 
 # Variables
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-if(NOT MSVC)
-        set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g")
-endif()
-
-if(MSVC)
-        # Match the static runtime that most LLVM binary distributions ship and avoid
-        # /MDd vs /MD mismatches when linking the dependency stack on Windows.
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -gfull")
 
 project(Mergen)
 
 # Packages
-option(BUILD_WITH_ZYDIS "Force using the Zydis backend (skip Rust/Cargo for iced)" OFF)
-
 find_package(Iced-Wrapper REQUIRED)
 
 find_package(LLVM-Wrapper REQUIRED)
 
 include(FetchContent)
 
-# Prefer vendored dependencies when present to avoid repeated downloads on
-# Windows and other network-restricted environments.
-set(LINUX_PE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/linux-pe")
-if(EXISTS "${LINUX_PE_SOURCE}/CMakeLists.txt")
-        message(STATUS "Using vendored linux-pe from ${LINUX_PE_SOURCE}")
-        FetchContent_Declare(linux-pe SYSTEM
-                SOURCE_DIR
-                        "${LINUX_PE_SOURCE}"
-        )
-else()
-        # Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
-        if(POLICY CMP0135)
-                cmake_policy(SET CMP0135 NEW)
-        endif()
-        message(STATUS "Fetching linux-pe (be6d1f6)...")
-        FetchContent_Declare(linux-pe SYSTEM
-                GIT_REPOSITORY
-                        "https://github.com/can1357/linux-pe"
-                GIT_TAG
-                        be6d1f6
-        )
+# Fix warnings about DOWNLOAD_EXTRACT_TIMESTAMP
+if(POLICY CMP0135)
+	cmake_policy(SET CMP0135 NEW)
 endif()
+message(STATUS "Fetching linux-pe (be6d1f6)...")
+FetchContent_Declare(linux-pe SYSTEM
+	GIT_REPOSITORY
+		"https://github.com/can1357/linux-pe"
+	GIT_TAG
+		be6d1f6
+)
 FetchContent_MakeAvailable(linux-pe)
 
 if(ICED_NOT_FOUND) # NOTE: unnamed condition
-        set(ZYDIS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Zydis-4.1.0")
-        if(EXISTS "${ZYDIS_SOURCE_DIR}/CMakeLists.txt")
-                message(STATUS "Using vendored Zydis from ${ZYDIS_SOURCE_DIR}")
-                FetchContent_Declare(Zydis SYSTEM
-                        SOURCE_DIR
-                                "${ZYDIS_SOURCE_DIR}"
-                )
-        else()
-                message(STATUS "Fetching Zydis (v4.1.0)...")
-                FetchContent_Declare(Zydis SYSTEM
-                        GIT_REPOSITORY
-                                "https://github.com/zyantific/zydis"
-                        GIT_TAG
-                                v4.1.0
-                )
-        endif()
-        FetchContent_MakeAvailable(Zydis)
+	message(STATUS "Fetching Zydis (v4.1.0)...")
+	FetchContent_Declare(Zydis SYSTEM
+		GIT_REPOSITORY
+			"https://github.com/zyantific/zydis"
+		GIT_TAG
+			v4.1.0
+	)
+	FetchContent_MakeAvailable(Zydis)
 
 endif()
 message(STATUS "Fetching magic_enum (a413fcc)...")
@@ -157,14 +127,9 @@ target_compile_features(lifter PRIVATE
 )
 
 if(MSVC) # msvc
-        target_compile_options(lifter PRIVATE
-                "/Zc:preprocessor"
-                "/permissive-"
-                "/Zc:__cplusplus"
-                "/EHsc"
-                "/bigobj"
-                "/utf-8"
-        )
+	target_compile_options(lifter PRIVATE
+		"/Zc:preprocessor"
+	)
 endif()
 
 target_link_libraries(lifter PRIVATE
