@@ -451,8 +451,8 @@ public:
       return getUnvisitedAddr(out);
     }
 
-    // std::cout << "queue:" << pendingBlocks.size() << " visited:"
-    //           << visitedAddresses.size() << "\n";
+     std::cout << "queue:" << pendingBlocks.size() << " visited:"
+               << visitedAddresses.size() << "\n";
 
     printvalue2("adding :" + std::to_string(out.block_address) +
                 out.block->getName());
