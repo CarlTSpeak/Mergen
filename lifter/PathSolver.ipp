@@ -30,11 +30,9 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)::solvePath(
     auto bb_solved = getOrCreateBB(dest, "bb_solved_const");
 
     builder->CreateBr(bb_solved);
-    blockInfo = BBInfo(dest, bb_solved, branch_backup(bb_solved));
+    blockInfo = BBInfo(dest, bb_solved);
     printvalue2("pushing block");
-    if (!addUnvisitedAddr(blockInfo)) {
-      discard_backup(blockInfo);
-    }
+    unvisitedBlocks.push_back(blockInfo);
 
     return result;
   }
@@ -48,11 +46,9 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)::solvePath(
       auto bb_solved = getOrCreateBB(dest, "bb_solved");
 
       builder->CreateBr(bb_solved);
-      blockInfo = BBInfo(dest, bb_solved, branch_backup(bb_solved));
+      blockInfo = BBInfo(dest, bb_solved);
       printvalue2("pushing block");
-      if (!addUnvisitedAddr(blockInfo)) {
-        discard_backup(blockInfo);
-      }
+      unvisitedBlocks.push_back(blockInfo);
 
       return solved;
     }
@@ -72,12 +68,9 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)::solvePath(
 
     auto bb_solved = getOrCreateBB(pv[0].getZExtValue(), "bb_single");
     builder->CreateBr(bb_solved);
-    blockInfo = BBInfo(pv[0].getZExtValue(), bb_solved,
-                       branch_backup(bb_solved));
+    blockInfo = BBInfo(pv[0].getZExtValue(), bb_solved);
     printvalue2("pushing block");
-    if (!addUnvisitedAddr(blockInfo)) {
-      discard_backup(blockInfo);
-    }
+    unvisitedBlocks.push_back(blockInfo);
   }
   if (pv.size() == 2) {
 
@@ -155,21 +148,16 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)::solvePath(
 
     // lifters.push_back(newlifter);
 
-    // Capture distinct backups for each assumption assignment so the two paths
-    // can restore their own register/memory snapshots without clobbering one
-    // another.
+    // store mem&reg info for BB
+    addUnvisitedAddr(blockInfo);
+    addUnvisitedAddr(newblock);
+
+    // fix this later, is ugly
     assumptions[cast<Instruction>(condition)] = 0;
-    blockInfo.backupIndex = branch_backup(blockInfo.block);
+    branch_backup(blockInfo.block);
 
     this->assumptions[cast<Instruction>(condition)] = 1;
-    newblock.backupIndex = branch_backup(newblock.block);
-
-    if (!addUnvisitedAddr(blockInfo)) {
-      discard_backup(blockInfo);
-    }
-    if (!addUnvisitedAddr(newblock)) {
-      discard_backup(newblock);
-    }
+    branch_backup(newblock.block);
 
     debugging::doIfDebug([&]() {
       std::string Filename = "output_newpath.ll";
