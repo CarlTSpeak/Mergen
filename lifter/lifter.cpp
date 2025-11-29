@@ -45,17 +45,24 @@ void asm_to_zydis_to_lift(lifterConcolic<>* lifter,
 
   BBInfo bbinfo;
   bool filter = 0;
+  std::size_t iteration = 0;
   while (lifter->getUnvisitedAddr(bbinfo, filter)) {
+
+    std::cout << "[driver] iteration=" << iteration++ << " pending="
+              << lifter->pendingCount() << " visited=" << lifter->visitedCount()
+              << " queue=" << lifter->queueCount() << std::endl;
 
     // printvalueforce2("exploring " + std::to_string(bbinfo.block_address));
 
     if (!(bbinfo.block->empty()) && filter) {
       printvalue2("not empty");
+      std::cout << "[driver] skip non-empty block addr=" << std::hex
+                << bbinfo.block_address << std::dec << std::endl;
       continue;
     };
 
     filter = 1;
-    lifter->load_backup(bbinfo.block);
+    lifter->load_backup(bbinfo);
     lifter->finished = 0;
     auto next_bb_name = bbinfo.block->getName();
     printvalue2(next_bb_name);
@@ -63,6 +70,10 @@ void asm_to_zydis_to_lift(lifterConcolic<>* lifter,
 
     lifter->liftBasicBlockFromAddress(bbinfo.block_address);
   }
+
+  std::cout << "[driver] exploration complete pending="
+            << lifter->pendingCount() << " visited=" << lifter->visitedCount()
+            << " queue=" << lifter->queueCount() << std::endl;
 }
 
 void InitFunction_and_LiftInstructions(const uint64_t runtime_address,

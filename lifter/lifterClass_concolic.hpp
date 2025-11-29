@@ -7,6 +7,7 @@
 #include "icedDisassembler_registers.h"
 #include "lifterClass.hpp"
 #include <magic_enum/magic_enum.hpp>
+#include <vector>
 
 template <
 #ifdef ICED_FOUND
@@ -166,41 +167,63 @@ public:
     backup_point& operator=(backup_point&&) noexcept = default;
   };
 
-  llvm::DenseMap<BasicBlock*, backup_point> BBbackup;
-  void branch_backup_impl(BasicBlock* bb) {
+  llvm::DenseMap<BasicBlock*, std::vector<backup_point>> BBbackup;
+  std::size_t branch_backup_impl(BasicBlock* bb) {
     //
 
     printvalue2("backing up");
     printvalue2(this->counter);
     printvalue2("dbg1");
-    BBbackup[bb] = backup_point(vec, vecflag, this->buffer, this->cache,
-                                this->assumptions, this->counter);
+    auto& slots = BBbackup[bb];
+    slots.emplace_back(vec, vecflag, this->buffer, this->cache,
+                       this->assumptions, this->counter);
     printvalue2("dbg2");
+    return slots.size() - 1;
   }
 
-  void load_backup_impl(BasicBlock* bb) {
-    if (BBbackup.contains(bb)) {
+  void discard_backup_impl(const BBInfo& info) {
+    auto it = BBbackup.find(info.block);
+    if (it == BBbackup.end())
+      return;
+
+    auto& slots = it->second;
+    // Only trim the most recently created slot when it matches the abandoned
+    // index. This prevents removing backups that are still queued for other
+    // paths while keeping runaway growth in check when enqueueing is skipped.
+    if (!slots.empty() && info.backupIndex == slots.size() - 1) {
+      slots.pop_back();
+    }
+  }
+
+  void load_backup_impl(const BBInfo& info) {
+    auto it = BBbackup.find(info.block);
+    if (it != BBbackup.end() && info.backupIndex != BBInfo::kNoBackup &&
+        info.backupIndex < it->second.size()) {
 
       printvalue2("loading backup");
-      backup_point bbinfo = BBbackup[bb];
+      const backup_point& bbinfo = it->second[info.backupIndex];
       vec = bbinfo.vec;
       vecflag = bbinfo.vecflag;
       this->buffer = bbinfo.buffer;
       this->cache = bbinfo.cache;
       this->assumptions = bbinfo.assumptions;
       this->counter = bbinfo.ct;
-      }
-	  
-  static std::size_t lastBBBackup = 0;
-	if (BBbackup.size() / 100 != lastBBBackup / 100) {
-    lastBBBackup = BBbackup.size();
-    llvm::errs() << "[debug] BBbackup.size(): " << lastBBBackup << "\n";
-}
-static std::size_t lastVec = 0;
-if (vec.size() / 1000 != lastVec / 1000) {
-    lastVec = vec.size();
-    llvm::errs() << "[debug] vec.size(): " << lastVec << "\n";
-}
+    } else {
+      std::cout << "[queue] missing backup for addr=" << std::hex
+                << info.block_address << " slot=" << std::dec
+                << info.backupIndex << std::endl;
+    }
+
+    static std::size_t lastBBBackup = 0;
+    if (BBbackup.size() / 100 != lastBBBackup / 100) {
+      lastBBBackup = BBbackup.size();
+      llvm::errs() << "[debug] BBbackup.size(): " << lastBBBackup << "\n";
+    }
+    static std::size_t lastVec = 0;
+    if (vec.size() / 1000 != lastVec / 1000) {
+      lastVec = vec.size();
+      llvm::errs() << "[debug] vec.size(): " << lastVec << "\n";
+    }
   }
 
   void createFunction_impl() {
