@@ -413,6 +413,23 @@ public:
   bool addUnvisitedAddr(BBInfo& bb) {
     printvalue2(bb.block_address);
     printvalue2("added");
+    // Avoid re-queuing blocks we've already explored. Without this guard,
+    // obfuscated control flow can repeatedly schedule the same address and
+    // explode the backup state we keep per pending block, eventually
+    // exhausting memory.
+    if (visitedAddresses.contains(bb.block_address)) {
+      printvalue2("skip visited block");
+      return false;
+    }
+
+    // Prevent multiple queued copies of the same block when branches converge
+    // to an existing target. This keeps the pending queue bounded while still
+    // exploring each unique address once.
+    if (!pendingBlocks.insert(bb.block_address).second) {
+      printvalue2("skip duplicate pending block");
+      return false;
+    }
+
     unvisitedBlocks.push_back(bb);
     return true;
   }
@@ -426,12 +443,16 @@ public:
 
     out = std::move(unvisitedBlocks.back());
     unvisitedBlocks.pop_back();
+    pendingBlocks.erase(out.block_address);
 
     if (getControlFlow() == ControlFlow::Basic && !(out.block->empty()) &&
         filter) {
       printvalue2("not empty ;D ");
       return getUnvisitedAddr(out);
     }
+
+    // std::cout << "queue:" << pendingBlocks.size() << " visited:"
+    //           << visitedAddresses.size() << "\n";
 
     printvalue2("adding :" + std::to_string(out.block_address) +
                 out.block->getName());
@@ -532,6 +553,7 @@ public:
   // todo : std::set
   std::vector<BBInfo> unvisitedBlocks;
   std::set<uint64_t> visitedAddresses;
+  std::set<uint64_t> pendingBlocks;
   llvm::DenseMap<uint64_t, llvm::BasicBlock*> addrToBB;
 
   // creates an edge to created bb
