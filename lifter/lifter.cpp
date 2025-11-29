@@ -55,7 +55,7 @@ void asm_to_zydis_to_lift(lifterConcolic<>* lifter,
     };
 
     filter = 1;
-    lifter->load_backup(bbinfo.block);
+    lifter->load_backup(bbinfo);
     lifter->finished = 0;
     auto next_bb_name = bbinfo.block->getName();
     printvalue2(next_bb_name);
