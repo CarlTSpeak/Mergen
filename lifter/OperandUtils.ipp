@@ -353,7 +353,7 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(KnownBits)
   }
 
   auto SQ = createSimplifyQuery(ctxI);
-  computeKnownBits(value, knownBits, SQ);  // (V, Known, SQ, Depth=0)
+  computeKnownBits(value, knownBits, 0, SQ);  // (V, Known, SQ, Depth=0)
   return knownBits;  // already BitWidth wide
 }
 
