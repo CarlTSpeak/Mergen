@@ -410,21 +410,16 @@ public:
     }
   }
 
+  std::unordered_map<std::uint64_t, unsigned> blockVisitCount{};
+
   bool addUnvisitedAddr(BBInfo& bb) {
     printvalue2(bb.block_address);
     printvalue2("added");
-    // Avoid re-queuing blocks we've already explored. Without this guard,
-    // obfuscated control flow can repeatedly schedule the same address and
-    // explode the backup state we keep per pending block, eventually
-    // exhausting memory.
-    if (visitedAddresses.contains(bb.block_address)) {
-      printvalue2("skip visited block");
-      return false;
-    }
 
-    // Prevent multiple queued copies of the same block when branches converge
-    // to an existing target. This keeps the pending queue bounded while still
-    // exploring each unique address once.
+    // We NO LONGER block on visitedAddresses here.
+    // Blocks may be revisited by other paths / later states.
+
+    // Prevent multiple queued copies of the same block at once.
     if (!pendingBlocks.insert(bb.block_address).second) {
       printvalue2("skip duplicate pending block");
       return false;
@@ -437,30 +432,43 @@ public:
   /*
   filter : filter for empty blocks
   */
-  bool getUnvisitedAddr(BBInfo& out, bool filter = 0) {
-    if (unvisitedBlocks.empty())
-      return false;
+  bool getUnvisitedAddr(BBInfo& out, bool preferEmpty /* = false */) {
+    while (!unvisitedBlocks.empty()) {
+      out = std::move(unvisitedBlocks.back());
+      unvisitedBlocks.pop_back();
+      pendingBlocks.erase(out.block_address);
 
-    out = std::move(unvisitedBlocks.back());
-    unvisitedBlocks.pop_back();
-    pendingBlocks.erase(out.block_address);
+      // Optional: Basic mode skip...
+      if (getControlFlow() == ControlFlow::Basic && !out.block->empty() &&
+          preferEmpty) {
+        printvalue2("skipping non-empty block in Basic mode");
+        continue;
+      }
 
-    if (getControlFlow() == ControlFlow::Basic && !(out.block->empty()) &&
-        filter) {
-      printvalue2("not empty ;D ");
-      return getUnvisitedAddr(out);
+      // NEW: per-block visit cap
+      auto& count = blockVisitCount[out.block_address];
+      ++count;
+
+      if ((count & (count - 1)) == 0) { // power of two
+        printvalue2("block visit count: " + std::to_string(count) + " for " +
+                    std::to_string(out.block_address));
+      }
+
+      std::cout << "bb queue:" << pendingBlocks.size()
+                << " unique bb visited:" << visitedAddresses.size() << "\n";
+
+      printvalue2("adding :" + std::to_string(out.block_address) +
+                  out.block->getName());
+
+      visitedAddresses.insert(out.block_address);
+      blockInfo = out;
+      return true;
     }
 
-     std::cout << "queue:" << pendingBlocks.size() << " visited:"
-               << visitedAddresses.size() << "\n";
-
-    printvalue2("adding :" + std::to_string(out.block_address) +
-                out.block->getName());
-
-    visitedAddresses.insert(out.block_address);
-    blockInfo = out;
-    return true;
+    return false;
   }
+
+
 
   void writeFunctionToFile(const std::string filename) {
     // Buffer the IR into memory first to avoid repeatedly flushing to disk

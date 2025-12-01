@@ -327,19 +327,19 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(Value*)::doPatternMatching(
 
 MERGEN_LIFTER_DEFINITION_TEMPLATES(KnownBits)
 ::analyzeValueKnownBits(Value* value, Instruction* ctxI) {
-  auto *Ty = value->getType();
+  auto* Ty = value->getType();
   if (!Ty->isIntegerTy())
-    return KnownBits();  // or assert, depending on your expectations
+    return KnownBits(); // or assert if you only expect ints
 
   unsigned BitWidth = Ty->getIntegerBitWidth();
   KnownBits knownBits(BitWidth);
   knownBits.resetAll();
 
-  // Bail on >64-bit ints, but keep correct width
+  // Bail on >64-bit ints / undef, but with correct width
   if (BitWidth > 64 || isa<UndefValue>(value))
-    return knownBits;  // all unknown, correct bit width
+    return knownBits; // all unknown
 
-  if (auto *v_inst = dyn_cast<Instruction>(value)) {
+  if (auto* v_inst = dyn_cast<Instruction>(value)) {
     auto it = assumptions.find(v_inst);
     if (it != assumptions.end()) {
       auto a = it->second;
@@ -347,14 +347,13 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(KnownBits)
     }
   }
 
-  if (auto *CIv = dyn_cast<ConstantInt>(value)) {
-    return KnownBits::makeConstant(
-        APInt(BitWidth, CIv->getZExtValue(), false));
+  if (auto* CIv = dyn_cast<ConstantInt>(value)) {
+    return KnownBits::makeConstant(APInt(BitWidth, CIv->getZExtValue(), false));
   }
 
   auto SQ = createSimplifyQuery(ctxI);
-  computeKnownBits(value, knownBits, 0, SQ);  // (V, Known, SQ, Depth=0)
-  return knownBits;  // already BitWidth wide
+  computeKnownBits(value, knownBits, 0, SQ); // (V, KnownBits, Depth, SQ)
+  return knownBits;
 }
 
 Value* simplifyValue(Value* v, const DataLayout& DL) {

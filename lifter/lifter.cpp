@@ -47,21 +47,22 @@ void asm_to_zydis_to_lift(lifterConcolic<>* lifter,
   bool filter = 0;
   while (lifter->getUnvisitedAddr(bbinfo, filter)) {
 
-    // printvalueforce2("exploring " + std::to_string(bbinfo.block_address));
-
-    if (!(bbinfo.block->empty()) && filter) {
-      printvalue2("not empty");
-      continue;
-    };
-
     filter = 1;
+
+    std::cerr << "[lifter] Lifting block at address: 0x" << std::hex
+              << bbinfo.block_address << std::dec << "\n";
+
+    std::cerr << "[solvePath] stats: calls=" << gSolveCalls
+              << " constInt=" << gSolveConstInt
+              << " constraint=" << gSolveConstraint << " pv0=" << gSolvePv0
+              << " pv1=" << gSolvePv1 << " pv2=" << gSolvePv2 << "\n";
+
     lifter->load_backup(bbinfo.block);
     lifter->finished = 0;
-    auto next_bb_name = bbinfo.block->getName();
-    printvalue2(next_bb_name);
     lifter->builder->SetInsertPoint(bbinfo.block);
 
     lifter->liftBasicBlockFromAddress(bbinfo.block_address);
+  
   }
 }
 
@@ -74,29 +75,30 @@ void InitFunction_and_LiftInstructions(const uint64_t runtime_address,
   main->loadFile(fileBase);
   // configure memory policy - debug for now
 
-  main->memoryPolicy.setDefaultMode(MemoryAccessMode::SYMBOLIC);
+  main->memoryPolicy.setDefaultMode(MemoryAccessMode::CONCRETE);
 
+  main->memoryPolicy.addRange(0x140000000, 0x141D23FFFF,
+                              MemoryAccessMode::SYMBOLIC);
+  main->memoryPolicy.addRange(0x141D240000, 0x14481BFAF,
+                              MemoryAccessMode::CONCRETE);
+  main->memoryPolicy.addRange(0x14481BFB0, 0x14581BFAF,
+                              MemoryAccessMode::SYMBOLIC);
+  main->memoryPolicy.addRange(0x14581BFB0, 0x1467E7000,
+                              MemoryAccessMode::CONCRETE);
+ 
+  /*
   for (auto& it : main->file.sections_v) {
-    if (it.characteristics.mem_write) {
-      // printvalue2(main->file.imageBase + it.virtual_address);
-      // printvalue2(main->file.imageBase + it.virtual_address +
-      // it.virtual_size); printvalue2("symbolic");
-      main->memoryPolicy.addRange(main->file.imageBase + it.virtual_address,
-                                  main->file.imageBase + it.virtual_address +
-                                      it.virtual_size,
-                                  MemoryAccessMode::SYMBOLIC);
-    } else {
-      // printvalue2(main->file.imageBase + it.virtual_address);
+          // printvalue2(main->file.imageBase + it.virtual_address);
       // printvalue2(main->file.imageBase + it.virtual_address +
       // it.virtual_size); printvalue2("concrete");
       main->memoryPolicy.addRange(main->file.imageBase + it.virtual_address,
                                   main->file.imageBase + it.virtual_address +
                                       it.virtual_size,
-                                  MemoryAccessMode::CONCRETE);
-    }
-  }
+                                  MemoryAccessMode::SYMBOLIC);
+  }*/
+
   main->memoryPolicy.addRange(STACKP_VALUE - 0x1000, STACKP_VALUE + 0x1000,
-                              MemoryAccessMode::CONCRETE);
+                              MemoryAccessMode::SYMBOLIC);
   /*   auto addr = 5369843712;
     main->memoryPolicy.addRange(addr + 2, addr + 0x4,
     MemoryAccessMode::SYMBOLIC);

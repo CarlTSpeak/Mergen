@@ -239,41 +239,66 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(Value*)::computeSignFlag(
                           ConstantInt::get(value->getType(), 0), "signflag");
 }
 
-// this function is used for jumps that are related to user, ex: vms using
-// different handlers, jmptables, etc.
 MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::branchHelper(
     Value* condition, const std::string& instname, int numbered, bool reverse) {
-  // TODO:
-  // save the current state of memory, registers etc.,
-  // after execution is finished, return to latest state and continue
-  // execution from the other branch
 
-  auto block = builder->GetInsertBlock();
+  auto* block = builder->GetInsertBlock();
+  auto* function = block->getParent();
+
+  // Name this block for debugging
   block->setName(instname + std::to_string(numbered));
-  auto function = block->getParent();
 
-  auto true_jump_addr = instruction.immediate + current_address;
+  // Compute static branch targets.
+  // IMPORTANT: if current_address here is the address of *next* instruction
+  // (after decoding), then:
+  //   true_target  = current_address + instruction.immediate
+  //   false_target = current_address                (fallthrough)
+  //
+  // If current_address is still the address of the *current* instruction,
+  // then true_target should be current_address + size + imm,
+  // and false_target should be current_address + size.
+  //
+  // This matches how your existing code behaved, so we keep the same pattern:
+  auto true_addr = instruction.immediate + current_address;
+  auto false_addr = current_address;
 
-  Value* true_jump =
-      ConstantInt::get(function->getReturnType(), true_jump_addr);
+  if (reverse) {
+    std::swap(true_addr, false_addr);
+  }
 
-  auto false_jump_addr = current_address;
-  Value* false_jump =
-      ConstantInt::get(function->getReturnType(), false_jump_addr);
-  Value* next_jump = nullptr;
+  // Create (or reuse) basic blocks for both targets.
+  auto* bbTrue = getOrCreateBB(true_addr, "bb_true");
+  auto* bbFalse = getOrCreateBB(false_addr, "bb_false");
 
-  if (!reverse)
-    next_jump = createSelectFolder(condition, true_jump, false_jump);
-  else
-    next_jump = createSelectFolder(condition, false_jump, true_jump);
+  // Use the original condition, possibly inverted.
+  llvm::Value* branchCond = condition;
+  if (reverse) {
+    // If you want strict inversion instead of swapping addresses, do:
+    // branchCond = builder->CreateNot(condition);
+    // and remove the std::swap above.
+    // For now we *only* swapped addresses, so no logical inversion.
+  }
 
-  uint64_t destination = 0;
-  solvePath(function, destination, next_jump);
+  builder->SetInsertPoint(block);
+  auto* br = builder->CreateCondBr(condition, bbTrue, bbFalse);
+  RegisterBranch(br);
 
-  block->setName("previousjmp_block-" + std::to_string(destination) + "-");
-  // cout << "pathInfo:" << pathInfo << " dest: " << destination  <<
-  // "\n";
+  // Schedule both successors for exploration.
+  BBInfo trueInfo(true_addr, bbTrue);
+  BBInfo falseInfo(false_addr, bbFalse);
+
+  addUnvisitedAddr(trueInfo);
+  addUnvisitedAddr(falseInfo);
+
+  // Tag this block for debugging.
+  block->setName("previousjmp_block-" + std::to_string(true_addr) + "-" +
+                 std::to_string(false_addr));
+
+  // Stop lifting further instructions in this block: this is a terminator.
+  run = 0;
 }
+
+
 MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_bextr() {
   /*
   auto src2 = operands[2];
@@ -627,60 +652,38 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_cmovcc() {
   SetIndexValue(0, result);
 }
 
-// for now assume every call is fake
 MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_call() {
   LLVMContext& context = builder->getContext();
 
-  // 0 = function
-  // 1 = rip
-  // 2 = register rsp
-  // 3 = [rsp]
-  /*
-  auto src = operands[0];        // value that we are pushing
-  auto rsp = operands[2];        // value that we are pushing
-  auto rsp_memory = operands[3]; // value that we are pushing
-  */
-  auto RspValue = GetRegisterValue(Register::RSP);
+  auto rspValue = GetRegisterValue(Register::RSP);
+  auto wordSize = file.getMode() == arch_mode::X64 ? 8 : 4;
+  auto wordConst = ConstantInt::getSigned(Type::getInt64Ty(context), wordSize);
 
-  auto val = ConstantInt::getSigned(Type::getInt64Ty(context),
-                                    file.getMode() == arch_mode::X64 ? 8 : 4);
+  // New RSP after the call's push
+  auto newRsp = createSubFolder(rspValue, wordConst, "pushing_newrsp");
 
-  auto result = createSubFolder(RspValue, val, "pushing_newrsp");
-
-  uint64_t jump_address = current_address;
-
-  std::string block_name = "jmp_call-" + std::to_string(jump_address) + "-";
+  uint64_t jump_address = current_address; // sentinel: "no inline target yet"
 
   auto registerValue = GetIndexValue(0);
   switch (instruction.types[0]) {
   case OperandType::Immediate8:
-  case OperandType::Immediate16: // todo : pretty sure this 8 and 16 will cause
-                                 // troubles later
+  case OperandType::Immediate16:
   case OperandType::Immediate32:
-  case OperandType::Immediate64: {
-
-    // if (auto imm = dyn_cast<ConstantInt>(GetIndexValue(0))) {
-    //   jump_address += imm->getSExtValue();
-    //   break;
-    // }
-    // UNREACHABLE("wont reach");
-    // break;
-  }
+  case OperandType::Immediate64:
   case OperandType::Memory8:
-  case OperandType::Memory16: // todo : pretty sure this 8 and 16 will cause
-                              // troubles later
+  case OperandType::Memory16:
   case OperandType::Memory32:
   case OperandType::Memory64:
   case OperandType::Register8:
   case OperandType::Register16:
   case OperandType::Register32:
   case OperandType::Register64: {
+    // RIP-relative adjustment for direct calls
     registerValue =
         createAddFolder(registerValue, GetRegisterValue(Register::RIP));
-    // auto registerValue = GetIndexValue(0);
-    if (getControlFlow() == ControlFlow::Basic ||
-        !isa<ConstantInt>(registerValue)) {
 
+    // Only go opaque if the target is genuinely non-constant
+    if (!isa<ConstantInt>(registerValue)) {
       std::cout << "did call";
       registerValue->print(outs());
       std::cout << "\n";
@@ -689,56 +692,58 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_call() {
 
       builder->CreateCall(parseArgsType(nullptr, context), idltvm,
                           parseArgs(nullptr));
-
-      break;
+      break; // no inlining, no CFG edge created
     }
-    auto registerCValue = cast<ConstantInt>(registerValue);
-    if (inlinePolicy.isOutline(registerCValue->getZExtValue())) {
 
-      std::cout << "did call";
-      registerValue->print(outs());
-      std::cout << "\n";
+    // Constant call target
+    auto* registerCValue = cast<ConstantInt>(registerValue);
+    auto target = static_cast<std::uint64_t>(registerCValue->getZExtValue());
+
+    // If policy says "outline", keep it as an opaque call
+    if (inlinePolicy.isOutline(target)) {
+      std::cout << "did call 0x" << std::hex << target << std::dec << "\n";
       auto idltvm =
           builder->CreateIntToPtr(registerValue, PointerType::get(context, 0));
 
       builder->CreateCall(parseArgsType(nullptr, context), idltvm,
                           parseArgs(nullptr));
-
       break;
     }
-    jump_address = registerCValue->getZExtValue();
+
+    // Otherwise: we intend to inline / follow this call
+    jump_address = target;
     break;
   }
+
   default:
     UNREACHABLE("unreachable in call");
     break;
   }
 
-  // if inlining call
-  // TODO:
-  if (getControlFlow() == ControlFlow::Unflatten) {
-    SetRegisterValue(Register::RSP, result);
-    // // sub rsp 8 last,
+  // If we didn't discover an inline target, we're done.
+  if (jump_address == current_address)
+    return;
 
-    auto push_into_rsp = GetRegisterValue(Register::RIP);
+  // Inline / follow the callee: model the call stack and branch into callee.
+  SetRegisterValue(Register::RSP, newRsp);
 
-    SetMemoryValue(getSPaddress(), push_into_rsp);
-    // // sub rsp 8 last,
+  // push return address (current RIP) on the (symbolic) stack
+  auto retAddr = GetRegisterValue(Register::RIP);
+  SetMemoryValue(getSPaddress(), retAddr);
 
-    auto bb = getOrCreateBB(jump_address, "bb_call");
-    // if its trying to jump somewhere else than our binary, call it and
-    // continue from [rsp]
+  auto* bb = getOrCreateBB(jump_address, "bb_call");
+  builder->SetInsertPoint(builder->GetInsertBlock());
+  auto* br = builder->CreateBr(bb);
+  RegisterBranch(br);
 
-    // // TODO: add some of this code to solvePath
-    builder->CreateBr(bb);
+  BBInfo info(jump_address, bb);
+  blockInfo = info;
+  printvalue2("pushing block");
+  addUnvisitedAddr(info);
 
-    // printvalue2(jump_address);
+  // This block ends at the call for our analysis purposes
+  run = 0;
 
-    blockInfo = BBInfo(jump_address, bb);
-    printvalue2("pushing block");
-    addUnvisitedAddr(blockInfo);
-    run = 0;
-  }
 }
 
 int ret_count = 0;
@@ -870,7 +875,23 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_ret() { // fix
 
   SetRegisterValue(Register::RSP, rsp_result); // then add rsp 8
 
-  solvePath(function, destination, realval);
+  PATH_info pathInfo = solvePath(function, destination, realval);
+
+  if (pathInfo == PATH_solved) {
+    // Treat this like an indirect jmp to 'destination'
+    auto* block = builder->GetInsertBlock();
+    auto* targetBB = getOrCreateBB(destination, "bb_rop_ret");
+
+    builder->SetInsertPoint(block);
+    auto* br = builder->CreateBr(targetBB);
+    RegisterBranch(br);
+
+    // Optionally rename for debugging:
+    block->setName("rop_return-" + std::to_string(destination) + "-");
+  } else {
+    printvalueforce2("lift_ret: unsolved ROP return at 0x" +
+                     std::to_string(current_address));
+  }
 }
 
 int jmpcount = 0;
@@ -904,10 +925,21 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(void)::lift_jmp() {
   default:
     break;
   }
-  solvePath(function, destination, trunc);
+  PATH_info pathInfo = solvePath(function, destination, trunc);
   printvalue2(destination);
-  // printvalue(newRip);
-  // SetRegisterValueWrapper(Register::RIP, newRip);
+
+  if (pathInfo == PATH_solved) {
+    auto* block = builder->GetInsertBlock();
+    auto* targetBB = getOrCreateBB(destination, "bb_jmp");
+
+    builder->SetInsertPoint(block);
+    auto* br = builder->CreateBr(targetBB);
+    RegisterBranch(br);
+
+    block->setName("jmp-" + std::to_string(destination) + "-");
+  } else {
+    std::cout << "lift_jmp: unsolved jmp at 0x" << std::hex << current_address << std::endl;
+  }
 }
 
 int branchnumber = 0;

@@ -1,5 +1,6 @@
 #pragma once
 #include "MemoryPolicy.hpp"
+#include <sstream>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Value.h>
 
@@ -16,3 +17,9 @@ void final_optpass(llvm::Function* clonedFuncx, llvm::Value* mem,
 
 PATH_info solvePath(llvm::Function* function, uint64_t& dest,
                     llvm::Value* simplifyValue);
+
+static std::string to_hex(uint64_t v) {
+  std::ostringstream oss;
+  oss << std::hex << v;
+  return oss.str();
+}

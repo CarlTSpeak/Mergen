@@ -454,12 +454,8 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)
       raw_fd_ostream OS(Filename, EC);
       builder->GetInsertBlock()->getParent()->getParent()->print(OS, nullptr);
     });
-    // Quiet this down if you like:
-    // printvalue2(max_unknown);
-	printvalueforce2(max_unknown);
     return values; // empty == "too many possibilities"
   }
-
   // 1..kMaxUnknownBitsEnumerate: manageable → enumerate all combos
   for (uint64_t i = 0; i < (1ULL << max_unknown); ++i) {
     llvm::APInt temp = base;
@@ -471,7 +467,6 @@ MERGEN_LIFTER_DEFINITION_TEMPLATES(pvalueset)
     }
     values.insert(temp);
   }
-  printvalueforce2(max_unknown);
   return values;
 }
 

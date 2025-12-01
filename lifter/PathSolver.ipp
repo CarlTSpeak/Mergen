@@ -4,6 +4,7 @@
 #include "PathSolver.h"
 #include "lifterClass.hpp"
 #include "utils.h"
+
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/MemorySSA.h>
 #include <llvm/Analysis/MemorySSAUpdater.h>
@@ -15,162 +16,161 @@
 #include <llvm/IR/Value.h>
 #include <llvm/Support/Casting.h>
 
-MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)::solvePath(
-    llvm::Function* function, uint64_t& dest, Value* simplifyValue) {
+static std::atomic<std::uint64_t> gSolveCalls{0};
+static std::atomic<std::uint64_t> gSolveConstInt{0};
+static std::atomic<std::uint64_t> gSolveConstraint{0};
+static std::atomic<std::uint64_t> gSolvePv0{0};
+static std::atomic<std::uint64_t> gSolvePv1{0};
+static std::atomic<std::uint64_t> gSolvePv2{0};
 
-  // do static polymorphism here
-
+MERGEN_LIFTER_DEFINITION_TEMPLATES(PATH_info)
+::solvePath(llvm::Function* function, uint64_t& dest,
+            llvm::Value* simplifyValue) {
+  
+  ++gSolveCalls;
   PATH_info result = PATH_unsolved;
-  if (llvm::ConstantInt* constInt =
-          dyn_cast<llvm::ConstantInt>(simplifyValue)) {
+
+  // --- Module range helpers (unchanged in spirit) ---
+  uint64_t moduleMin = 0;
+  uint64_t moduleMax = 0;
+
+  auto initModuleBounds = [&]() {
+    if (moduleMax != 0)
+      return;
+
+    uint64_t base = this->file.imageBase;
+    uint64_t maxEnd = base;
+
+    for (const auto& sec : this->file.sections_v) {
+      uint64_t start = base + sec.virtual_address;
+      uint64_t end = start + sec.virtual_size;
+      if (end > maxEnd)
+        maxEnd = end;
+    }
+
+    moduleMin = base;
+    moduleMax = maxEnd;
+  };
+
+  auto isValidTarget = [&](uint64_t target) -> bool {
+    initModuleBounds();
+    return target >= moduleMin && target < moduleMax;
+  };
+
+  // Helper: schedule a block for a concrete target.
+  auto scheduleTargetBB = [&](uint64_t target,
+                              const std::string& label) -> BBInfo {
+    auto* bb = getOrCreateBB(target, label);
+    BBInfo info(target, bb);
+
+    // We only schedule here. No CFG mutation.
+    addUnvisitedAddr(info);
+    return info;
+  };
+
+  // --- 1) Trivial constant: immediate solve ---
+  if (auto* constInt = llvm::dyn_cast<llvm::ConstantInt>(simplifyValue)) {
+    ++gSolveConstInt;
     dest = constInt->getZExtValue();
     result = PATH_solved;
     run = 0;
 
-    auto bb_solved = getOrCreateBB(dest, "bb_solved_const");
+    if (!isValidTarget(dest)) {
+      std::cerr << "[solvePath] constant dest out of range: 0x" << std::hex
+                << dest << std::dec << "\n";
+      return result;
+    }
 
-    builder->CreateBr(bb_solved);
-    blockInfo = BBInfo(dest, bb_solved);
-    printvalue2("pushing block");
-    unvisitedBlocks.push_back(blockInfo);
-
+    scheduleTargetBB(dest, "bb_solved_const");
     return result;
   }
 
-  if (PATH_info solved = getConstraintVal(function, simplifyValue, dest)) {
+  // --- 2) Try constraint machinery ---
+  {
+    PATH_info solved = getConstraintVal(function, simplifyValue, dest);
     if (solved == PATH_solved) {
+      ++gSolveConstraint;
       run = 0;
-      std::cout << "Solved the constraint and moving to next path\n"
-                << std::flush;
 
-      auto bb_solved = getOrCreateBB(dest, "bb_solved");
+      if (!isValidTarget(dest)) {
+        std::cerr << "[solvePath] constraint dest out of range: 0x" << std::hex
+                  << dest << std::dec << "\n";
+        return solved;
+      }
 
-      builder->CreateBr(bb_solved);
-      blockInfo = BBInfo(dest, bb_solved);
-      printvalue2("pushing block");
-      unvisitedBlocks.push_back(blockInfo);
-
+      scheduleTargetBB(dest, "bb_solved");
       return solved;
     }
   }
 
-  // unsolved
+  // --- 3) Unsolved: enumerate possible values ---
   printvalue(simplifyValue);
   run = 0;
+
   auto pvset = computePossibleValues(simplifyValue);
-  std::vector<APInt> pv(pvset.begin(), pvset.end());
-  if (pv.size() == 1) {
-    printvalue2(pv[0]);
-    /*
-    auto bb_solved = BasicBlock::Create(function->getContext(), "bb_false",
-                                        builder->GetInsertBlock()->getParent());
-    */
+  std::vector<llvm::APInt> pv(pvset.begin(), pvset.end());
 
-    auto bb_solved = getOrCreateBB(pv[0].getZExtValue(), "bb_single");
-    builder->CreateBr(bb_solved);
-    blockInfo = BBInfo(pv[0].getZExtValue(), bb_solved);
-    printvalue2("pushing block");
-    unvisitedBlocks.push_back(blockInfo);
+
+
+  std::cerr << "[solvePath] pv values:";
+  for (const auto& v : pv) {
+    std::cerr << " 0x" << std::hex << v.getZExtValue() << std::dec;
   }
-  if (pv.size() == 2) {
+  std::cerr << "\n";
 
-    // auto bb_false = BasicBlock::Create(function->getContext(), "bb_false",
-    //                                    builder->GetInsertBlock()->getParent());
-    // auto bb_true = BasicBlock::Create(function->getContext(), "bb_true",
-    //                                   builder->GetInsertBlock()->getParent());
+  if (pv.empty()) {
+    // Nothing we can do.
+    ++gSolvePv0;
+    return result;
+  }
 
-    auto firstcase = pv[0];
-    auto secondcase = pv[1];
-	printvalueforce2(pv.size());
-    static auto try_simplify = [&](APInt c1,
-                                   Value* simplifyv) -> std::optional<Value*> {
-      if (auto si = dyn_cast<SelectInst>(simplifyv)) {
-        auto firstcase_v = builder->getIntN(
-            simplifyv->getType()->getIntegerBitWidth(), c1.getZExtValue());
-        if (si->getTrueValue() == firstcase_v) {
-          printvalue(si);
-          printvalue(firstcase_v);
-          return si->getCondition();
-        }
-      }
-      return std::nullopt;
-    };
+  // 3a) Exactly one possible value: treat as concrete, but keep PATH_unsolved.
+  if (pv.size() == 1) {
+    ++gSolvePv1;
+    auto value = pv[0];
+    uint64_t t = value.getZExtValue();
+    printvalue2(value);
 
-    Value* condition = nullptr;
-
-    // condition value is a kind of hack
-    // 1- if its a select, we can extract the condition
-    // 1a- if firstcase is in the select, extract the condition
-    // 1b- if secondcase is in the select, extract the condition and reverse
-    // values
-    // 2- create a hacky compare for condition == potentialvalue
-
-    printvalue2(firstcase);
-    printvalue2(secondcase);
-
-    if (auto can_simplify = try_simplify(firstcase, simplifyValue)) {
-      printvalue2("b");
-      condition = can_simplify.value();
-    } else if (auto can_simplify2 = try_simplify(secondcase, simplifyValue)) {
-      // TODO: fix?
-      printvalue2("c");
-      std::swap(firstcase, secondcase);
-      condition = can_simplify2.value();
-    } else {
-      printvalue2("a");
-      condition = createICMPFolder(
-          llvm::CmpInst::ICMP_EQ, simplifyValue,
-          builder->getIntN(simplifyValue->getType()->getIntegerBitWidth(),
-                           firstcase.getZExtValue()));
+    if (!isValidTarget(t)) {
+      std::cerr << "[solvePath] single pv target out of range: 0x" << std::hex
+                << t << std::dec << "\n";
+      return result;
     }
 
-    printvalue2(firstcase);
-    printvalue2(secondcase);
-    auto bb_true = getOrCreateBB(firstcase.getZExtValue(), "bb_true");
-    auto bb_false = getOrCreateBB(secondcase.getZExtValue(), "bb_false");
-    printvalue(condition);
-    auto BR = builder->CreateCondBr(condition, bb_true, bb_false);
-
-    RegisterBranch(BR);
-
-    printvalue2(firstcase);
-    printvalue2(secondcase);
-    blockInfo = BBInfo(secondcase.getZExtValue(), bb_false);
-    // for [this], we can assume condition is true
-    // we can simplify any value tied to is dependent on condition,
-    // and try to simplify any value calculates condition
-
-    // for [newlifter], we can assume condition is false
-    auto newblock = BBInfo(firstcase.getZExtValue(), bb_true);
-
-    // this->blockInfo = newblock;
-    printvalue(condition);
-
-    // lifters.push_back(newlifter);
-
-    // store mem&reg info for BB
-    addUnvisitedAddr(blockInfo);
-    addUnvisitedAddr(newblock);
-
-    // fix this later, is ugly
-    assumptions[cast<Instruction>(condition)] = 0;
-    branch_backup(blockInfo.block);
-
-    this->assumptions[cast<Instruction>(condition)] = 1;
-    branch_backup(newblock.block);
-
-    debugging::doIfDebug([&]() {
-      std::string Filename = "output_newpath.ll";
-      std::error_code EC;
-      llvm::raw_fd_ostream OS(Filename, EC);
-      function->getParent()->print(OS, nullptr);
-    });
-    std::cout << "created a new path\n" << std::flush;
+    scheduleTargetBB(t, "bb_single");
+    return result;
   }
 
-  if (pv.size() > 2) {
-    UNREACHABLE("cant reach more than 2 paths!");
+  // 3b) Exactly two possible values: we’ll leave CFG emission to caller,
+  // but we still figure out the two targets and schedule them.
+  if (pv.size() == 2) {
+    ++gSolvePv2;
+    auto firstCase = pv[0];
+    auto secondCase = pv[1];
+
+    printvalueforce2(pv.size());
+    printvalue2(firstCase);
+    printvalue2(secondCase);
+
+    uint64_t trueTarget = firstCase.getZExtValue();
+    uint64_t falseTarget = secondCase.getZExtValue();
+
+    if (!isValidTarget(trueTarget) || !isValidTarget(falseTarget)) {
+      std::cerr << "[solvePath] branch targets out of range: true=0x"
+                << std::hex << trueTarget << " false=0x" << falseTarget
+                << std::dec << "\n";
+      return result;
+    }
+
+    // Schedule both as potential successors. Caller decides how to wire CFG.
+    scheduleTargetBB(trueTarget, "bb_true");
+    scheduleTargetBB(falseTarget, "bb_false");
+
+    // For now, we still consider PATH_unsolved: we haven't collapsed the
+    // condition, just enumerated.
+    return result;
   }
 
+ 
   return result;
 }
